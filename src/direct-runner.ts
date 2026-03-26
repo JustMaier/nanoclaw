@@ -7,7 +7,7 @@
  * Mirrors the ContainerInput/ContainerOutput interface of container-runner.ts
  * so the rest of the system doesn't need to know which mode is active.
  */
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -16,10 +16,12 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   IDLE_TIMEOUT,
+  ONECLI_URL,
 } from './config.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { OneCLI } from '@onecli-sh/sdk';
 import { RegisteredGroup } from './types.js';
 import {
   ContainerInput,
@@ -33,6 +35,8 @@ import {
   parseOutputMarkers,
   parseFinalOutput,
 } from './agent-environment.js';
+
+const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Re-export types that index.ts imports from container-runner
 export { writeTasksSnapshot, writeGroupsSnapshot };
@@ -59,7 +63,7 @@ function ensureAgentRunnerBuilt(): string {
   const nodeModules = path.join(agentRunnerDir, 'node_modules');
   if (!fs.existsSync(nodeModules)) {
     logger.info('Installing agent-runner dependencies...');
-    const { execSync } = require('child_process');
+
     execSync('npm install', { cwd: agentRunnerDir, stdio: 'pipe' });
   }
 
@@ -71,7 +75,7 @@ function ensureAgentRunnerBuilt(): string {
 
   if (needsBuild) {
     logger.info('Building agent-runner for direct mode...');
-    const { execSync } = require('child_process');
+
     execSync('npx tsc', { cwd: agentRunnerDir, stdio: 'pipe' });
   }
 
@@ -153,10 +157,36 @@ export async function runDirectAgent(
   // MCP server path — use the built version alongside index.js
   const mcpServerPath = path.join(path.dirname(entryPoint), 'ipc-mcp-stdio.js');
 
+  // Get credentials from OneCLI gateway (same mechanism as container mode).
+  // In container mode, applyContainerConfig() adds -e flags to docker run.
+  // In direct mode, we get the same env vars and pass them to the child process.
+  const agentIdentifier = input.isMain
+    ? undefined
+    : group.folder.toLowerCase().replace(/_/g, '-');
+  let credentialEnv: Record<string, string> = {};
+  try {
+    const config = await onecli.getContainerConfig(agentIdentifier);
+    credentialEnv = config.env;
+    // Write CA cert so the child process can verify the OneCLI proxy's TLS
+    if (config.caCertificate) {
+      const caPath = path.join(DATA_DIR, 'onecli-ca.pem');
+      fs.mkdirSync(path.dirname(caPath), { recursive: true });
+      fs.writeFileSync(caPath, config.caCertificate);
+      credentialEnv.NODE_EXTRA_CA_CERTS = caPath;
+    }
+    logger.info({ processName }, 'OneCLI credentials applied for direct mode');
+  } catch {
+    logger.warn(
+      { processName },
+      'OneCLI gateway not reachable — direct agent will have no credentials',
+    );
+  }
+
   // Build environment for the child process
   const childEnv: Record<string, string | undefined> = {
     ...process.env,
     ...directEnv,
+    ...credentialEnv,
     // Pass IPC dir to the MCP server
     NANOCLAW_IPC_DIR: directEnv.NANOCLAW_IPC_DIR,
   };
