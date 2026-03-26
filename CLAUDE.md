@@ -4,7 +4,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Docker/Apple Container) or as local Node.js processes (direct mode, `DIRECT_MODE=true`). Each group has isolated filesystem and memory.
 
 ## Key Files
 
@@ -14,8 +14,10 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/channels/registry.ts` | Channel registry (self-registration at startup) |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals |
+| `src/config.ts` | Trigger pattern, paths, intervals, DIRECT_MODE |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/direct-runner.ts` | Spawns agents as local Node.js processes (direct mode) |
+| `src/agent-environment.ts` | Shared setup: sessions, skills, IPC, output parsing |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
@@ -23,7 +25,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection at request time, so no keys or tokens are ever passed to agents directly. In container mode, OneCLI adds Docker env flags. In direct mode, the runner calls `onecli.getContainerConfig()` to get the same env vars and CA cert. Run `onecli --help`.
 
 ## Skills
 
@@ -69,6 +71,11 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
 systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
+
+# Windows (Task Scheduler + PowerShell)
+powershell -ExecutionPolicy Bypass -File start-nanoclaw.ps1  # start
+schtasks /End /TN "NanoClaw"                                  # stop
+schtasks /Create /TN "NanoClaw" /XML nanoclaw-task.xml /F     # register (requires Admin)
 ```
 
 ## Troubleshooting
