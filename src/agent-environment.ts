@@ -1,14 +1,17 @@
 /**
- * Shared agent environment utilities.
+ * Shared agent environment setup for NanoClaw.
+ * Used by both container-runner (Docker) and direct-runner (native).
  *
- * Extracted from container-runner.ts so that any runner (container or direct)
- * can reuse group setup, IPC directory creation, skill syncing, and output parsing.
+ * Centralizes group environment creation so changes only need to happen once:
+ * - Session settings, skills syncing, IPC directory structure
+ * - Output marker parsing, timeout management
  */
 import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 export const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -22,25 +25,7 @@ export interface ContainerOutput {
 }
 
 /**
- * Ensure the global shared memory directory exists.
- */
-export function ensureGlobalDir(): string {
-  const globalDir = path.join(GROUPS_DIR, 'global');
-  fs.mkdirSync(globalDir, { recursive: true });
-  return globalDir;
-}
-
-/**
- * Set up the group folder on disk if it does not exist.
- */
-export function setupGroupEnvironment(groupFolder: string): string {
-  const groupDir = resolveGroupFolderPath(groupFolder);
-  fs.mkdirSync(groupDir, { recursive: true });
-  return groupDir;
-}
-
-/**
- * Ensure per-group IPC directories exist.
+ * Ensure all directories for a group's IPC communication exist.
  */
 export function ensureGroupIpcDirs(groupFolder: string): string {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
@@ -51,7 +36,8 @@ export function ensureGroupIpcDirs(groupFolder: string): string {
 }
 
 /**
- * Ensure per-group Claude session settings exist (settings.json with defaults).
+ * Ensure per-group Claude sessions directory exists with default settings.
+ * Returns the path to the .claude directory.
  */
 export function ensureGroupSessionSettings(groupFolder: string): string {
   const groupSessionsDir = path.join(
@@ -61,6 +47,7 @@ export function ensureGroupSessionSettings(groupFolder: string): string {
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -78,11 +65,12 @@ export function ensureGroupSessionSettings(groupFolder: string): string {
       ) + '\n',
     );
   }
+
   return groupSessionsDir;
 }
 
 /**
- * Sync container skills from container/skills/ into a group's .claude/skills/.
+ * Sync skills from container/skills/ into a group's .claude/skills/ directory.
  */
 export function syncSkillsToGroup(groupSessionsDir: string): void {
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
@@ -99,7 +87,7 @@ export function syncSkillsToGroup(groupSessionsDir: string): void {
 
 /**
  * Copy agent-runner source into a per-group writable location.
- * Recompiled on container startup via entrypoint.sh.
+ * Returns the path to the group's agent-runner-src directory.
  */
 export function syncAgentRunnerSource(groupFolder: string): string {
   const projectRoot = process.cwd();
@@ -115,6 +103,7 @@ export function syncAgentRunnerSource(groupFolder: string): string {
     groupFolder,
     'agent-runner-src',
   );
+
   if (fs.existsSync(agentRunnerSrc)) {
     const srcIndex = path.join(agentRunnerSrc, 'index.ts');
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
@@ -127,11 +116,53 @@ export function syncAgentRunnerSource(groupFolder: string): string {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
   }
+
   return groupAgentRunnerDir;
 }
 
 /**
- * Parse output markers from a buffer, extracting all complete marker pairs.
+ * Ensure the global memory directory exists.
+ */
+export function ensureGlobalDir(): string {
+  const globalDir = path.join(GROUPS_DIR, 'global');
+  fs.mkdirSync(globalDir, { recursive: true });
+  return globalDir;
+}
+
+/**
+ * Set up the full group environment (sessions, skills, IPC, agent-runner).
+ * Shared between container and direct mode.
+ */
+export function setupGroupEnvironment(
+  group: RegisteredGroup,
+  _isMain: boolean,
+): {
+  groupDir: string;
+  groupIpcDir: string;
+  groupSessionsDir: string;
+  groupAgentRunnerDir: string;
+  globalDir: string;
+} {
+  const groupDir = resolveGroupFolderPath(group.folder);
+  fs.mkdirSync(groupDir, { recursive: true });
+
+  const groupIpcDir = ensureGroupIpcDirs(group.folder);
+  const groupSessionsDir = ensureGroupSessionSettings(group.folder);
+  syncSkillsToGroup(groupSessionsDir);
+  const groupAgentRunnerDir = syncAgentRunnerSource(group.folder);
+  const globalDir = ensureGlobalDir();
+
+  return {
+    groupDir,
+    groupIpcDir,
+    groupSessionsDir,
+    groupAgentRunnerDir,
+    globalDir,
+  };
+}
+
+/**
+ * Parse streaming output markers from a buffer.
  * Returns parsed outputs and the remaining unparsed buffer.
  */
 export function parseOutputMarkers(buffer: string): {
@@ -144,7 +175,7 @@ export function parseOutputMarkers(buffer: string): {
   let startIdx: number;
   while ((startIdx = remaining.indexOf(OUTPUT_START_MARKER)) !== -1) {
     const endIdx = remaining.indexOf(OUTPUT_END_MARKER, startIdx);
-    if (endIdx === -1) break;
+    if (endIdx === -1) break; // Incomplete pair, wait for more data
 
     const jsonStr = remaining
       .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
@@ -154,7 +185,7 @@ export function parseOutputMarkers(buffer: string): {
     try {
       outputs.push(JSON.parse(jsonStr));
     } catch {
-      // Skip malformed JSON
+      // Malformed JSON, skip this marker pair
     }
   }
 

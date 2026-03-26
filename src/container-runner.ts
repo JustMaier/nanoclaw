@@ -25,6 +25,10 @@ import {
   setupGroupEnvironment,
   parseOutputMarkers,
   parseFinalOutput,
+  ensureGroupIpcDirs,
+  ensureGroupSessionSettings,
+  syncSkillsToGroup,
+  syncAgentRunnerSource,
 } from './agent-environment.js';
 import {
   CONTAINER_RUNTIME_BIN,
@@ -35,15 +39,6 @@ import {
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-import {
-  OUTPUT_START_MARKER,
-  OUTPUT_END_MARKER,
-  ensureGroupIpcDirs,
-  ensureGroupSessionSettings,
-  syncSkillsToGroup,
-  syncAgentRunnerSource,
-  type ContainerOutput,
-} from './agent-environment.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -137,7 +132,7 @@ function buildVolumeMounts(
   const groupSessionsDir = ensureGroupSessionSettings(group.folder);
   syncSkillsToGroup(groupSessionsDir);
   mounts.push({
-    hostPath: env.groupSessionsDir,
+    hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
@@ -145,7 +140,7 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   const groupIpcDir = ensureGroupIpcDirs(group.folder);
   mounts.push({
-    hostPath: env.groupIpcDir,
+    hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
@@ -153,7 +148,7 @@ function buildVolumeMounts(
   // Copy agent-runner source into a per-group writable location
   const groupAgentRunnerDir = syncAgentRunnerSource(group.folder);
   mounts.push({
-    hostPath: env.groupAgentRunnerDir,
+    hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
   });
