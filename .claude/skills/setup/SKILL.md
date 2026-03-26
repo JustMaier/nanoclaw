@@ -240,7 +240,18 @@ If service already running: unload first.
 
 Run `npx tsx setup/index.ts --step service` and parse the status block.
 
-**If SERVICE_TYPE=windows-task-scheduler:** Windows Task Scheduler was used. If SERVICE_LOADED=false, the task may need elevated permissions. Tell the user to run the setup command from an elevated (Administrator) PowerShell, or manually import `nanoclaw-task.xml` via Task Scheduler GUI. They can also start manually with: `powershell -ExecutionPolicy Bypass -File start-nanoclaw.ps1`.
+**If SERVICE_TYPE=windows-task-scheduler:** Windows Task Scheduler requires elevated (Administrator) permissions to register tasks. Claude Code **cannot** run admin commands — you MUST use `AskUserQuestion` to have the user do this themselves. Tell them:
+
+> To register NanoClaw as a scheduled task (auto-start on login), open **PowerShell as Administrator** and run:
+> ```
+> schtasks /Create /TN "NanoClaw" /XML "C:\Dev\Repos\ai\nanoclaw\nanoclaw-task.xml" /F
+> ```
+> Or to start NanoClaw right now without auto-start, run in any terminal:
+> ```
+> powershell -ExecutionPolicy Bypass -File start-nanoclaw.ps1
+> ```
+
+Do NOT attempt to run `schtasks /Create` yourself — it will fail without elevation. Wait for the user to confirm they've done it, then verify with `schtasks /Query /TN "NanoClaw"`.
 
 **If FALLBACK=wsl_no_systemd:** WSL without systemd detected. Tell user they can either enable systemd in WSL (`echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf` then restart WSL) or use the generated `start-nanoclaw.sh` wrapper.
 
@@ -297,7 +308,3 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 **Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw` | Windows: `schtasks /End /TN "NanoClaw"`
 
 
-## 9. Diagnostics
-
-1. Use the Read tool to read `.claude/skills/setup/diagnostics.md`.
-2. Follow every step in that file before completing setup.
