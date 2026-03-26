@@ -19,6 +19,14 @@ import {
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  ContainerOutput,
+  OUTPUT_START_MARKER,
+  OUTPUT_END_MARKER,
+  setupGroupEnvironment,
+  parseOutputMarkers,
+  parseFinalOutput,
+} from './agent-environment.js';
+import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
@@ -129,7 +137,7 @@ function buildVolumeMounts(
   const groupSessionsDir = ensureGroupSessionSettings(group.folder);
   syncSkillsToGroup(groupSessionsDir);
   mounts.push({
-    hostPath: groupSessionsDir,
+    hostPath: env.groupSessionsDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
@@ -137,7 +145,7 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   const groupIpcDir = ensureGroupIpcDirs(group.folder);
   mounts.push({
-    hostPath: groupIpcDir,
+    hostPath: env.groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
@@ -145,7 +153,7 @@ function buildVolumeMounts(
   // Copy agent-runner source into a per-group writable location
   const groupAgentRunnerDir = syncAgentRunnerSource(group.folder);
   mounts.push({
-    hostPath: groupAgentRunnerDir,
+    hostPath: env.groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
   });
@@ -305,33 +313,19 @@ export async function runContainerAgent(
       // Stream-parse for output markers
       if (onOutput) {
         parseBuffer += chunk;
-        let startIdx: number;
-        while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
-          const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
-          if (endIdx === -1) break; // Incomplete pair, wait for more data
+        const { outputs, remaining } = parseOutputMarkers(parseBuffer);
+        parseBuffer = remaining;
 
-          const jsonStr = parseBuffer
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-          parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
-
-          try {
-            const parsed: ContainerOutput = JSON.parse(jsonStr);
-            if (parsed.newSessionId) {
-              newSessionId = parsed.newSessionId;
-            }
-            hadStreamingOutput = true;
-            // Activity detected — reset the hard timeout
-            resetTimeout();
-            // Call onOutput for all markers (including null results)
-            // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
-          } catch (err) {
-            logger.warn(
-              { group: group.name, error: err },
-              'Failed to parse streamed output chunk',
-            );
+        for (const parsed of outputs) {
+          if (parsed.newSessionId) {
+            newSessionId = parsed.newSessionId;
           }
+          hadStreamingOutput = true;
+          // Activity detected — reset the hard timeout
+          resetTimeout();
+          // Call onOutput for all markers (including null results)
+          // so idle timers start even for "silent" query completions.
+          outputChain = outputChain.then(() => onOutput(parsed));
         }
       }
     });
@@ -548,22 +542,7 @@ export async function runContainerAgent(
 
       // Legacy mode: parse the last output marker pair from accumulated stdout
       try {
-        // Extract JSON between sentinel markers for robust parsing
-        const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
-        const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
-
-        let jsonLine: string;
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          jsonLine = stdout
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-        } else {
-          // Fallback: last non-empty line (backwards compatibility)
-          const lines = stdout.trim().split('\n');
-          jsonLine = lines[lines.length - 1];
-        }
-
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        const output = parseFinalOutput(stdout);
 
         logger.info(
           {

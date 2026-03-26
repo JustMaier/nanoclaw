@@ -6,6 +6,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
+  DIRECT_MODE,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -28,6 +29,11 @@ import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
 } from './container-runtime.js';
+import {
+  runDirectAgent,
+  ensureDirectModeReady,
+  cleanupDirectOrphans,
+} from './direct-runner.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -358,20 +364,27 @@ async function runAgent(
     : undefined;
 
   try {
-    const output = await runContainerAgent(
-      group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        assistantName: ASSISTANT_NAME,
-      },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
-      wrappedOnOutput,
-    );
+    const agentInput = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      assistantName: ASSISTANT_NAME,
+    };
+    const agentOnProcess = (
+      proc: import('child_process').ChildProcess,
+      name: string,
+    ) => queue.registerProcess(chatJid, proc, name, group.folder);
+
+    const output = DIRECT_MODE
+      ? await runDirectAgent(group, agentInput, agentOnProcess, wrappedOnOutput)
+      : await runContainerAgent(
+          group,
+          agentInput,
+          agentOnProcess,
+          wrappedOnOutput,
+        );
 
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
@@ -514,8 +527,13 @@ function recoverPendingMessages(): void {
 }
 
 function ensureContainerSystemRunning(): void {
-  ensureContainerRuntimeRunning();
-  cleanupOrphans();
+  if (DIRECT_MODE) {
+    ensureDirectModeReady();
+    cleanupDirectOrphans();
+  } else {
+    ensureContainerRuntimeRunning();
+    cleanupOrphans();
+  }
 }
 
 async function main(): Promise<void> {
