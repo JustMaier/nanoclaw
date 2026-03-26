@@ -41,6 +41,13 @@ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
+// Direct mode: run agent-runner as a local Node.js process instead of in Docker.
+// Works on all platforms (macOS, Linux, Windows) and removes the container runtime dependency.
+// Set DIRECT_MODE=true in .env or environment to enable.
+export const DIRECT_MODE =
+  (process.env.DIRECT_MODE || readEnvFile(['DIRECT_MODE']).DIRECT_MODE) ===
+  'true';
+
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(
