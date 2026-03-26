@@ -5,7 +5,7 @@ description: Run initial NanoClaw setup. Use when user wants to install dependen
 
 # NanoClaw Setup
 
-Run setup steps automatically. Only pause when user action is required (channel authentication, configuration choices). Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
+Run setup steps automatically. Only pause when user action is required (channel authentication, configuration choices). Setup uses `bash setup.sh` for bootstrap (on Windows, skip bash and perform equivalent steps manually), then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
 **Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. authenticating a channel, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
@@ -57,8 +57,10 @@ Run `bash setup.sh` and parse the status block.
 - If NODE_OK=false → Node.js is missing or too old. Use `AskUserQuestion: Would you like me to install Node.js 22?` If confirmed:
   - macOS: `brew install node@22` (if brew available) or install nvm then `nvm install 22`
   - Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`, or nvm
-  - After installing Node, re-run `bash setup.sh`
-- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry.
+  - Windows: `winget install OpenJS.NodeJS.LTS` or download from https://nodejs.org
+  - After installing Node, re-run `bash setup.sh` (or on Windows: `npm install && npm run build`)
+- On Windows: read `setup.sh` and perform equivalent steps: `npm install`, `npm run build`, verify `better-sqlite3` loads. If native module build fails, install Windows Build Tools: `npm install --global windows-build-tools` or install Visual Studio Build Tools with the "Desktop development with C++" workload.
+- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux, Windows Build Tools on Windows), then retry.
 - If NATIVE_OK=false → better-sqlite3 failed to load. Install build tools and re-run.
 - Record PLATFORM and IS_WSL for later steps.
 
@@ -112,6 +114,7 @@ Run `npx tsx setup/index.ts --step timezone` and parse the status block.
 Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM from step 1.
 
 - PLATFORM=linux → Docker (only option)
+- PLATFORM=windows → Docker Desktop (only option). Install from https://docker.com/products/docker-desktop if not found.
 - PLATFORM=macos + APPLE_CONTAINER=installed → Use `AskUserQuestion: Docker (cross-platform) or Apple Container (native macOS)?` If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
 - PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
 
@@ -149,7 +152,7 @@ Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse th
 
 ## 4. Anthropic Credentials via OneCLI
 
-NanoClaw uses OneCLI to manage credentials — API keys are never stored in `.env` or exposed to containers. The OneCLI gateway injects them at request time.
+NanoClaw uses OneCLI to manage credentials — API keys are never stored in `.env` or exposed to containers. The OneCLI gateway injects them at request time. On Windows, if OneCLI is not available, use the native credential proxy as a fallback (run `/use-native-credential-proxy`).
 
 Check if a secret already exists:
 ```bash
@@ -233,8 +236,11 @@ AskUserQuestion: Agent access to external directories?
 If service already running: unload first.
 - macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
 - Linux: `systemctl --user stop nanoclaw` (or `systemctl stop nanoclaw` if root)
+- Windows: `schtasks /End /TN "NanoClaw"` and `schtasks /Delete /TN "NanoClaw" /F`
 
 Run `npx tsx setup/index.ts --step service` and parse the status block.
+
+**If SERVICE_TYPE=windows-task-scheduler:** Windows Task Scheduler was used. If SERVICE_LOADED=false, the task may need elevated permissions. Tell the user to run the setup command from an elevated (Administrator) PowerShell, or manually import `nanoclaw-task.xml` via Task Scheduler GUI. They can also start manually with: `powershell -ExecutionPolicy Bypass -File start-nanoclaw.ps1`.
 
 **If FALLBACK=wsl_no_systemd:** WSL without systemd detected. Tell user they can either enable systemd in WSL (`echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf` then restart WSL) or use the generated `start-nanoclaw.sh` wrapper.
 
@@ -263,7 +269,7 @@ Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` 
 Run `npx tsx setup/index.ts --step verify` and parse the status block.
 
 **If STATUS=failed, fix each:**
-- SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
+- SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `schtasks /End /TN "NanoClaw" & schtasks /Run /TN "NanoClaw"` (Windows) or `bash start-nanoclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
 - CREDENTIALS=missing → re-run step 4 (check `onecli secrets list` for Anthropic secret)
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
@@ -282,7 +288,13 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 
 **Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
 
-**Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw`
+**Windows Task Scheduler not registering:** Run PowerShell as Administrator. If `schtasks /Create` fails, import the XML manually: open Task Scheduler GUI, right-click Task Scheduler Library, Import Task, select `nanoclaw-task.xml`.
+
+**Windows: Docker not accessible:** Ensure Docker Desktop is running. Check `docker info` in PowerShell. If permission denied, ensure your user is in the `docker-users` group (Settings > General > check "Expose daemon on tcp://...") or restart Docker Desktop.
+
+**Windows: logs location:** Check `logs/nanoclaw.log` and `logs/nanoclaw.error.log` in the project directory. For Task Scheduler history, open Task Scheduler GUI and check the History tab for the NanoClaw task.
+
+**Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw` | Windows: `schtasks /End /TN "NanoClaw"`
 
 
 ## 9. Diagnostics

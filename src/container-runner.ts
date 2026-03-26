@@ -27,12 +27,17 @@ import {
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import {
+  OUTPUT_START_MARKER,
+  OUTPUT_END_MARKER,
+  ensureGroupIpcDirs,
+  ensureGroupSessionSettings,
+  syncSkillsToGroup,
+  syncAgentRunnerSource,
+  type ContainerOutput,
+} from './agent-environment.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
-
-// Sentinel markers for robust output parsing (must match agent-runner)
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 export interface ContainerInput {
   prompt: string;
@@ -45,12 +50,8 @@ export interface ContainerInput {
   script?: string;
 }
 
-export interface ContainerOutput {
-  status: 'success' | 'error';
-  result: string | null;
-  newSessionId?: string;
-  error?: string;
-}
+// Re-export ContainerOutput from the shared module for backwards compatibility
+export type { ContainerOutput } from './agent-environment.js';
 
 interface VolumeMount {
   hostPath: string;
@@ -82,8 +83,17 @@ function buildVolumeMounts(
     // Credentials are injected by the OneCLI gateway, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
+      // /dev/null is not available on Windows; use a temporary empty file instead
+      let shadowPath = '/dev/null';
+      if (process.platform === 'win32') {
+        shadowPath = path.join(DATA_DIR, '.env-shadow');
+        if (!fs.existsSync(shadowPath)) {
+          fs.mkdirSync(path.dirname(shadowPath), { recursive: true });
+          fs.writeFileSync(shadowPath, '');
+        }
+      }
       mounts.push({
-        hostPath: '/dev/null',
+        hostPath: shadowPath,
         containerPath: '/workspace/project/.env',
         readonly: true,
       });
@@ -116,49 +126,8 @@ function buildVolumeMounts(
   }
 
   // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
-
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
+  const groupSessionsDir = ensureGroupSessionSettings(group.folder);
+  syncSkillsToGroup(groupSessionsDir);
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -166,44 +135,15 @@ function buildVolumeMounts(
   });
 
   // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  const groupIpcDir = ensureGroupIpcDirs(group.folder);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
-  if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-    }
-  }
+  // Copy agent-runner source into a per-group writable location
+  const groupAgentRunnerDir = syncAgentRunnerSource(group.folder);
   mounts.push({
     hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',

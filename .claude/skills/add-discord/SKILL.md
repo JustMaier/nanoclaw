@@ -109,7 +109,10 @@ The container reads environment from `data/env/env`, not `.env` directly.
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+# Restart NanoClaw service:
+# macOS: launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+# Linux: systemctl --user restart nanoclaw
+# Windows: schtasks /End /TN "NanoClaw" & schtasks /Run /TN "NanoClaw"
 ```
 
 ## Phase 4: Registration
@@ -169,7 +172,7 @@ tail -f logs/nanoclaw.log
 1. Check `DISCORD_BOT_TOKEN` is set in `.env` AND synced to `data/env/env`
 2. Check channel is registered: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE jid LIKE 'dc:%'"`
 3. For non-main channels: message must include trigger pattern (@mention the bot)
-4. Service is running: `launchctl list | grep nanoclaw`
+4. Service is running: `launchctl list | grep nanoclaw` (macOS) or `systemctl --user status nanoclaw` (Linux) or `schtasks /Query /TN "NanoClaw"` (Windows)
 5. Verify the bot has been invited to the server (check OAuth2 URL was used)
 
 ### Bot only responds to @mentions

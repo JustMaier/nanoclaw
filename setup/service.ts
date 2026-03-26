@@ -53,6 +53,8 @@ export async function run(_args: string[]): Promise<void> {
 
   if (platform === 'macos') {
     setupLaunchd(projectRoot, nodePath, homeDir);
+  } else if (platform === 'windows') {
+    setupWindows(projectRoot, nodePath, homeDir);
   } else if (platform === 'linux') {
     setupLinux(projectRoot, nodePath, homeDir);
   } else {
@@ -371,6 +373,102 @@ function setupNohupFallback(
     WRAPPER_PATH: wrapperPath,
     SERVICE_LOADED: false,
     FALLBACK: 'wsl_no_systemd',
+    STATUS: 'success',
+    LOG: 'logs/setup.log',
+  });
+}
+
+function setupWindows(
+  projectRoot: string,
+  nodePath: string,
+  _homeDir: string,
+): void {
+  logger.info('Setting up Windows Task Scheduler service');
+
+  // Generate PowerShell start script
+  const ps1Path = path.join(projectRoot, 'start-nanoclaw.ps1');
+  const ps1Content = `# start-nanoclaw.ps1 — Start NanoClaw on Windows
+# Run: powershell -ExecutionPolicy Bypass -File start-nanoclaw.ps1
+
+Set-Location ${JSON.stringify(projectRoot)}
+
+$logDir = Join-Path ${JSON.stringify(projectRoot)} "logs"
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+
+$stdoutLog = Join-Path $logDir "nanoclaw.log"
+$stderrLog = Join-Path $logDir "nanoclaw.error.log"
+
+Write-Host "Starting NanoClaw..."
+& ${JSON.stringify(nodePath)} ${JSON.stringify(path.join(projectRoot, 'dist', 'index.js'))} >> $stdoutLog 2>> $stderrLog
+`;
+  fs.writeFileSync(ps1Path, ps1Content);
+  logger.info({ ps1Path }, 'Wrote PowerShell start script');
+
+  // Generate Task Scheduler XML
+  const taskXmlPath = path.join(projectRoot, 'nanoclaw-task.xml');
+  const username = os.userInfo().username;
+  const taskXml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>NanoClaw Personal Assistant</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${username}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-ExecutionPolicy Bypass -WindowStyle Hidden -File ${JSON.stringify(ps1Path)}</Arguments>
+      <WorkingDirectory>${projectRoot}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>`;
+  fs.writeFileSync(taskXmlPath, taskXml);
+  logger.info({ taskXmlPath }, 'Wrote Task Scheduler XML');
+
+  // Try to register the task
+  let serviceLoaded = false;
+  try {
+    execSync(
+      `schtasks /Create /TN "NanoClaw" /XML ${JSON.stringify(taskXmlPath)} /F`,
+      { stdio: 'pipe' },
+    );
+    serviceLoaded = true;
+    logger.info('Windows Task Scheduler task registered');
+  } catch (err) {
+    logger.warn(
+      { err },
+      'Failed to register Task Scheduler task (may need elevated permissions)',
+    );
+  }
+
+  emitStatus('SETUP_SERVICE', {
+    SERVICE_TYPE: 'windows-task-scheduler',
+    NODE_PATH: nodePath,
+    PROJECT_PATH: projectRoot,
+    PS1_PATH: ps1Path,
+    TASK_XML_PATH: taskXmlPath,
+    SERVICE_LOADED: serviceLoaded,
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });

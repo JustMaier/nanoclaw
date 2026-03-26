@@ -123,10 +123,10 @@ Skills we'd like to see:
 
 ## Requirements
 
-- macOS, Linux, or Windows (via WSL2)
+- macOS, Linux, or Windows (native or WSL2)
 - Node.js 20+
 - [Claude Code](https://claude.ai/download)
-- [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+- [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux/Windows)
 
 ## Architecture
 
@@ -153,11 +153,11 @@ Key files:
 
 **Why Docker?**
 
-Docker provides cross-platform support (macOS, Linux and even Windows via WSL2) and a mature ecosystem. On macOS, you can optionally switch to Apple Container via `/convert-to-apple-container` for a lighter-weight native runtime. For additional isolation, [Docker Sandboxes](docs/docker-sandboxes.md) run each container inside a micro VM.
+Docker provides cross-platform support (macOS, Linux, and Windows) and a mature ecosystem. Docker Desktop works natively on Windows without requiring WSL2. On macOS, you can optionally switch to Apple Container via `/convert-to-apple-container` for a lighter-weight native runtime. For additional isolation, [Docker Sandboxes](docs/docker-sandboxes.md) run each container inside a micro VM.
 
 **Can I run this on Linux or Windows?**
 
-Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `/setup`.
+Yes. Windows is supported natively with Docker Desktop -- WSL2 is no longer required. Docker is the default runtime and works on macOS, Linux, and Windows. Just run `/setup`.
 
 **Is this secure?**
 

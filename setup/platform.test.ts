@@ -17,7 +17,7 @@ import {
 describe('getPlatform', () => {
   it('returns a valid platform string', () => {
     const result = getPlatform();
-    expect(['macos', 'linux', 'unknown']).toContain(result);
+    expect(['macos', 'linux', 'windows', 'unknown']).toContain(result);
   });
 });
 
@@ -73,7 +73,7 @@ describe('hasSystemd', () => {
 describe('getServiceManager', () => {
   it('returns a valid service manager', () => {
     const result = getServiceManager();
-    expect(['launchd', 'systemd', 'none']).toContain(result);
+    expect(['launchd', 'systemd', 'task-scheduler', 'none']).toContain(result);
   });
 
   it('matches the detected platform', () => {
@@ -81,6 +81,8 @@ describe('getServiceManager', () => {
     const result = getServiceManager();
     if (platform === 'macos') {
       expect(result).toBe('launchd');
+    } else if (platform === 'windows') {
+      expect(result).toBe('task-scheduler');
     } else {
       expect(['systemd', 'none']).toContain(result);
     }
