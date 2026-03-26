@@ -166,7 +166,15 @@ export async function runDirectAgent(
   let credentialEnv: Record<string, string> = {};
   try {
     const config = await onecli.getContainerConfig(agentIdentifier);
-    credentialEnv = config.env;
+    credentialEnv = { ...config.env };
+    // In direct mode, the child process runs on the host — not inside Docker.
+    // Replace host.docker.internal with localhost so the proxy is reachable.
+    for (const key of Object.keys(credentialEnv)) {
+      credentialEnv[key] = credentialEnv[key].replace(
+        /host\.docker\.internal/g,
+        '127.0.0.1',
+      );
+    }
     // Write CA cert so the child process can verify the OneCLI proxy's TLS
     if (config.caCertificate) {
       const caPath = path.join(DATA_DIR, 'onecli-ca.pem');
