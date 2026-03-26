@@ -134,7 +134,7 @@ Skills we'd like to see:
 Channels --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
 ```
 
-Single Node.js process. Channels are added via skills and self-register at startup — the orchestrator connects whichever ones have credentials present. Agents execute in isolated Linux containers with filesystem isolation. Only mounted directories are accessible. Per-group message queue with concurrency control. IPC via filesystem.
+Single Node.js process. Channels are added via skills and self-register at startup — the orchestrator connects whichever ones have credentials present. Agents execute in isolated Linux containers with filesystem isolation (or as local Node.js processes when `DIRECT_MODE=true`). Only mounted directories are accessible. Per-group message queue with concurrency control. IPC via filesystem.
 
 For the full architecture details, see the [documentation site](https://docs.nanoclaw.dev/concepts/architecture).
 
@@ -158,6 +158,10 @@ Docker provides cross-platform support (macOS, Linux and even Windows via WSL2) 
 **Can I run this on Linux or Windows?**
 
 Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `/setup`.
+
+**Can I run without Docker?**
+
+Yes. Set `DIRECT_MODE=true` in your `.env` file. In direct mode, agents run as local Node.js child processes instead of in Docker containers. This removes the container runtime dependency and works on any platform. You lose container isolation, but OneCLI credential security still applies.
 
 **Is this secure?**
 
